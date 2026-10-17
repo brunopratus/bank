@@ -148,19 +148,39 @@ app.delete("/mcp", bearer, (_req, res) => void res.status(405).set("Allow", "POS
 
 // --- Enable Banking redirect target ---
 
+// The callback page can load twice for one bank login (a reload, or the bank's
+// app opening the return address as well as the browser). The code is single
+// use, so the first load's result is shared with any repeat for a while, and
+// the pending authorization is only consumed once the session exists.
+type CallbackSession = Awaited<ReturnType<typeof eb.createSession>>;
+const callbacks = new Map<string, Promise<CallbackSession>>();
+const CALLBACK_REPLAY_MS = 10 * 60 * 1000;
+
 app.get("/callback", async (req, res) => {
   const { code, state, error, error_description } = req.query as Record<string, string | undefined>;
-  const pending = state ? store().takePendingAuth(state) : undefined;
   const failed = (msg: string) => res.status(400).type("html").send(failedPage(msg));
 
-  if (error || !code) return void failed(error_description || error || "The bank did not return an authorization code.");
-  if (!pending) return void failed("Unknown or expired authorization. Start again from Claude.");
+  if (error || !code || !state) return void failed(error_description || error || "The bank did not return an authorization code.");
+
+  let result = callbacks.get(state);
+  if (!result) {
+    if (!store().pendingAuth(state)) return void failed("Unknown or expired authorization. Start again from Claude.");
+    result = (async () => {
+      const session = await eb.createSession(code);
+      store().addSession(session);
+      store().takePendingAuth(state);
+      log(`bank connected: ${session.aspsp.name}, ${session.accounts.length} account(s)`);
+      return session;
+    })();
+    callbacks.set(state, result);
+    result.then(
+      () => setTimeout(() => callbacks.delete(state), CALLBACK_REPLAY_MS).unref(),
+      () => callbacks.delete(state),
+    );
+  }
 
   try {
-    const session = await eb.createSession(code);
-    store().addSession(session);
-    log(`bank connected: ${session.aspsp.name}, ${session.accounts.length} account(s)`);
-    res.type("html").send(connectedPage(session));
+    res.type("html").send(connectedPage(await result));
   } catch (err) {
     const msg = err instanceof EnableBankingError ? `Enable Banking returned ${err.status}: ${err.body.slice(0, 300)}` : (err as Error).message;
     log("callback failed", msg);

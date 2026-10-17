@@ -223,6 +223,10 @@ export class Store {
     });
   }
 
+  pendingAuth(state: string): PendingAuth | undefined {
+    return this.data.pending_auth[state];
+  }
+
   takePendingAuth(state: string): PendingAuth | undefined {
     return this.update((d) => {
       const p = d.pending_auth[state];

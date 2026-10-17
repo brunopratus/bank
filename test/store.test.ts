@@ -37,3 +37,11 @@ test("pending auth is single use", () => {
   assert.equal(s.takePendingAuth("st")?.bank.name, "B");
   assert.equal(s.takePendingAuth("st"), undefined);
 });
+
+test("looking up a pending auth does not consume it", () => {
+  const s = new Store(join(mkdtempSync(join(tmpdir(), "bank-")), "store.json"));
+  s.addPendingAuth({ state: "st", bank: { name: "B", country: "DK" }, started: new Date().toISOString() });
+  assert.equal(s.pendingAuth("st")?.bank.name, "B");
+  assert.equal(s.takePendingAuth("st")?.bank.name, "B");
+  assert.equal(s.pendingAuth("st"), undefined);
+});
